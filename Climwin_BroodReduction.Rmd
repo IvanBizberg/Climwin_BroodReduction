@@ -1,0 +1,1167 @@
+---
+title: "Brood Reducion Climwin"
+author: "Ivan Bizberg"
+date: "9/14/2020"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r global-options, include=FALSE}
+knitr::opts_chunk$set(fig.align = "center", fig.height = 10, fig.width = 15)
+```
+
+
+Libraries
+```{r message=FALSE, warning=TRUE}
+library(tidyverse)
+library(lubridate)
+# Analisis
+library(climwin)
+library(coxme)
+library(survival)
+library(survminer)
+# Model selection
+library(MuMIn)
+library(bbmle)
+# Plotting
+library(ggthemes)
+library(Greg)
+library(rms)
+```
+
+Set path
+```{r}
+path = "conducta"
+getwd()
+```
+
+
+Data
+```{r}
+# Biological data
+BioData = read.csv(str_glue("ClimMultiFailCox.csv"), sep = ",", header = T) %>%
+  select(WORKYEAR, NIDO, DATE, Time0, Time, Event, BroodReduction, HatchAsync, PROPORTIONALRANK) %>% 
+  mutate(DATE = ymd(DATE))
+```
+
+```{r}
+# Climatic data
+ClimData = read.csv(str_glue("C:/Users/{path}/Dropbox/PHD/DATA/Csv/ClimateVariables4.0.csv"), sep = ",", 
+                    header = T,stringsAsFactors = F) %>% 
+  rename(Date = time) %>% mutate(Date = ymd(Date)) %>% mutate(SST = as.numeric(SST))
+```
+
+# Finding window for chlorophyll-a
+
+```{r message=FALSE, warning=TRUE}
+Bio = BioData %>% filter(DATE >= "2003-05-01") %>%
+  na.omit()
+```
+
+```{r}
+Clim = ClimData %>% select(Date , Chl) %>%
+  filter(!Chl > 70) %>% # remove one oultlier
+  na.omit()
+```
+
+##Climwin analysis
+
+```{r message=FALSE, results="hide", cache=TRUE, warning=TRUE}
+ClimWin <- slidingwin(xvar = list(ClimVar = Clim$Chl), # Climatic variable
+                      cdate = Clim$Date,
+                      bdate = Bio$DATE,
+                      baseline = coxph(Surv(Time0, Time, BroodReduction) ~ HatchAsync +
+                                         PROPORTIONALRANK + Event + strata(Event), data = Bio),
+                      cinterval = "week",
+                      range = c(17, 0),
+                      type = "relative",
+                      stat = c("min", "max", "mean", "sum"),
+                      func = c("quad", "lin"),
+                      cmissing = "method1")
+```
+
+### Results
+
+```{r}
+Comb = (ClimWin$combos) %>% rownames_to_column() %>% arrange((DeltaAICc)); Comb
+```
+```{r}
+n = Comb %>% .[[1,1]] %>% as.numeric()
+tidy_stat = Comb %>% .[[1, 5]] %>% as.character()
+tidy_func = Comb %>% .[[1, 6]] %>% as.character()
+Results = ClimWin[[n]]$Dataset ; head(Results, n = 4)
+```
+```{r fig.height = 5, fig.width = 8, fig.align="center"}
+plotdelta(dataset = Results)
+```
+
+#### Extract data Chl
+```{r}
+ClimVar = "Chl"
+ClimateData = ClimWin[[n]]$BestModelData; head(ClimateData)
+Area_RainData = ClimateData %>% select(contains("climate")) %>% rename(!!ClimVar := climate) %>% 
+  rename_if((str_detect(names(.), "I\\(climate\\^2\\)")), ~ paste0(ClimVar, "_2")) %>% 
+  rename_if((str_detect(names(.), "I\\(climate\\^3\\)")), ~ paste0(ClimVar, "_3")) %>% 
+  bind_cols(Bio)
+write_csv(Area_RainData, str_glue("WinCox{ClimVar}.csv"))
+```
+## Randomization
+```{r message=FALSE, results="hide", cache=TRUE, warning=TRUE}
+ClimRand <- randwin(repeats = 15,
+                    xvar = list(ClimVar = Clim$Chl),
+                    cdate = Clim$Date,
+                    bdate = Bio$DATE,
+                    baseline = coxph(Surv(Time0, Time, BroodReduction) ~ HatchAsync + PROPORTIONALRANK + Event + strata(Event), data = Bio),
+                    cinterval = "week",
+                    range = c(17, 0),
+                    type = "relative",
+                    stat = tidy_stat,
+                    func = tidy_func,
+                    cmissing = "method1")
+```
+
+
+
+### Results of randomization
+```{r, fig.height = 5, fig.width = 8, fig.align="center"}
+ClimWinRand = ClimRand[[1]]
+
+# Diagnostic Plots
+
+pvalue(Results, ClimWinRand, metric = "C", sample.size = 16)
+
+plothist(Results, ClimWinRand)
+
+```
+
+
+
+# Data Bio 1989
+```{r}
+# Biological data
+Bio = BioData %>% filter(WORKYEAR > "1989") %>%
+  na.omit()
+```
+
+# Finding window for SST
+```{r}
+# Climatic data
+Clim = ClimData %>% select(Date , SST) %>%
+  na.omit()
+```
+
+##Climwin analysis
+
+```{r message=FALSE, results="hide", cache=TRUE, warning=TRUE}
+ClimWin <- slidingwin(xvar = list(ClimVar = Clim$SST), # Climatic variable
+                      cdate = Clim$Date,
+                      bdate = Bio$DATE,
+                      baseline = coxph(Surv(Time0, Time, BroodReduction) ~ HatchAsync +
+                                         PROPORTIONALRANK + Event + strata(Event) , data = Bio),
+                      cinterval = "week",
+                      range = c(17, 0),
+                      type = "relative",
+                      stat = c("max", "min", "sum", "mean"),
+                      func = c("quad", "lin"),
+                      cmissing = "method1")
+```
+
+### Results
+
+```{r}
+Comb = (ClimWin$combos) %>% rownames_to_column() %>% arrange((DeltaAICc)); Comb
+```
+
+```{r, fig.height = 5, fig.width = 8, fig.align="center"}
+n = Comb %>% .[[1,1]] %>% as.numeric()
+tidy_stat = Comb %>% .[[1, 5]] %>% as.character()
+tidy_func = Comb %>% .[[1, 6]] %>% as.character()
+Results = ClimWin[[n]]$Dataset ; head(Results, n = 4)
+```
+```{r}
+plotdelta(dataset = Results)
+```
+
+#### Extract data SST
+```{r}
+ClimVar = "SST"
+ClimateData = ClimWin[[n]]$BestModelData; head(ClimateData)
+Area_RainData = ClimateData %>% select(contains("climate")) %>% rename(!!ClimVar := climate) %>% 
+  rename_if((str_detect(names(.), "I\\(climate\\^2\\)")), ~ paste0(ClimVar, "_2")) %>% 
+  rename_if((str_detect(names(.), "I\\(climate\\^3\\)")), ~ paste0(ClimVar, "_3")) %>% 
+  bind_cols(Bio)
+write_csv(Area_RainData, str_glue("WinCox{ClimVar}.csv"))
+```
+
+## Randomization
+```{r message=FALSE, results="hide", cache=TRUE, warning=TRUE}
+ClimRand <- randwin(repeats = 15,
+                    xvar = list(ClimVar = Clim$SST),
+                    cdate = Clim$Date,
+                    bdate = Bio$DATE,
+                    baseline = coxph(Surv(Time0, Time, BroodReduction) ~ HatchAsync + PROPORTIONALRANK + Event + strata(Event), data = Bio),
+                    cinterval = "week",
+                    range = c(17, 0),
+                    type = "relative",
+                    stat = tidy_stat,
+                    func = tidy_func,
+                    cmissing = "method1")
+```
+
+
+
+### Results of randomization
+```{r, fig.height = 5, fig.width = 8, fig.align="center"}
+ClimWinRand = ClimRand[[1]]
+
+# Diagnostic Plots
+
+pvalue(Results, ClimWinRand, metric = "C", sample.size = 29)
+
+plothist(Results, ClimWinRand)
+
+```
+
+
+
+# Finding window for Rain and NRain
+
+```{r}
+# Climatic data
+Clim = ClimData %>%
+  select(Date , Rain, NdaysRain) %>%
+  na.omit()
+```
+
+##Climwin analysis Rain
+
+```{r message=FALSE, results="hide", cache=TRUE, warning=TRUE}
+ClimWin <- slidingwin(xvar = list(ClimVar = Clim$Rain), # Climatic variable
+                      cdate = Clim$Date,
+                      bdate = Bio$DATE,
+                      baseline = coxph(Surv(Time0, Time, BroodReduction) ~
+                                         HatchAsync +
+                                         PROPORTIONALRANK + Event + strata(Event), data = Bio),
+                      cinterval = "week",
+                      range = c(22, 0),
+                      type = "relative",
+                      stat = c("mean", "sum"), # Error with max/quad and min/quad
+                      func = c("quad", "lin"),
+                      cmissing = "method1")
+```
+
+### Results
+
+```{r}
+Comb = (ClimWin$combos) %>% rownames_to_column() %>% arrange((DeltaAICc)); Comb
+```
+
+```{r, fig.height = 5, fig.width = 8, fig.align="center"}
+n = Comb %>% .[[1,1]] %>% as.numeric()
+tidy_stat = Comb %>% .[[1, 5]] %>% as.character()
+tidy_func = Comb %>% .[[1, 6]] %>% as.character()
+Results = ClimWin[[n]]$Dataset ; head(Results, n = 4)
+```
+```{r}
+plotdelta(dataset = Results)
+```
+
+#### Extract data Rain
+```{r}
+ClimVar = "Rain"
+ClimateData = ClimWin[[n]]$BestModelData; head(ClimateData)
+Area_RainData = ClimateData %>% select(contains("climate")) %>% rename(!!ClimVar := climate) %>% 
+  rename_if((str_detect(names(.), "I\\(climate\\^2\\)")), ~ paste0(ClimVar, "_2")) %>% 
+  rename_if((str_detect(names(.), "I\\(climate\\^3\\)")), ~ paste0(ClimVar, "_3")) %>% 
+  bind_cols(Bio)
+write_csv(Area_RainData, str_glue("WinCox{ClimVar}.csv"))
+```
+## Randomization
+```{r message=FALSE, results="hide", cache=TRUE, warning=TRUE}
+ClimRand <- randwin(repeats = 15,
+                    xvar = list(ClimVar = Clim$Rain),
+                    cdate = Clim$Date,
+                    bdate = Bio$DATE,
+                    baseline = coxph(Surv(Time0, Time, BroodReduction) ~ HatchAsync + PROPORTIONALRANK + Event + strata(Event), data = Bio),
+                    cinterval = "week",
+                    range = c(22, 0),
+                    type = "relative",
+                    stat = tidy_stat,
+                    func = tidy_func,
+                    cmissing = "method1")
+```
+
+
+### Results of randomization
+```{r, fig.height = 5, fig.width = 8, fig.align="center"}
+ClimWinRand = ClimRand[[1]]
+
+# Diagnostic Plots
+
+pvalue(Results, ClimWinRand, metric = "C", sample.size = 29)
+
+plothist(Results, ClimWinRand)
+
+```
+
+
+## Climwin analysis number of rainy days
+
+```{r message=FALSE, results="hide", cache=TRUE, warning=TRUE}
+ClimWin <- slidingwin(xvar = list(ClimVar = Clim$NdaysRain), # Climatic variable
+                      cdate = Clim$Date,
+                      bdate = Bio$DATE,
+                      baseline = coxph(Surv(Time0, Time, BroodReduction) ~ HatchAsync +
+                                         PROPORTIONALRANK + Event + strata(Event) , data = Bio),
+                      cinterval = "week",
+                      range = c(22, 0),
+                      type = "relative",
+                      stat = c("mean", "sum"),
+                      func = c("quad", "lin"),
+                      cmissing = "method1")
+```
+
+### Results
+
+```{r}
+Comb = (ClimWin$combos) %>% rownames_to_column() %>% arrange((DeltaAICc)); Comb
+```
+
+```{r, fig.height = 5, fig.width = 8, fig.align="center"}
+n = Comb %>% .[[1,1]] %>% as.numeric()
+tidy_stat = Comb %>% .[[1, 5]] %>% as.character()
+tidy_func = Comb %>% .[[1, 6]] %>% as.character()
+Results = ClimWin[[n]]$Dataset ; head(Results, n = 4)
+```
+```{r}
+plotdelta(dataset = Results)
+```
+#### Extract data NRain
+```{r}
+ClimVar = "NRain"
+ClimateData = ClimWin[[n]]$BestModelData; head(ClimateData)
+Area_RainData = ClimateData %>% select(contains("climate")) %>% rename(!!ClimVar := climate) %>% 
+  rename_if((str_detect(names(.), "I\\(climate\\^2\\)")), ~ paste0(ClimVar, "_2")) %>% 
+  rename_if((str_detect(names(.), "I\\(climate\\^3\\)")), ~ paste0(ClimVar, "_3")) %>% 
+  bind_cols(Bio)
+write_csv(Area_RainData, str_glue("WinCox{ClimVar}.csv"))
+```
+## Randomization
+```{r message=FALSE, results="hide", cache=TRUE, warning=TRUE}
+ClimRand <- randwin(repeats = 15,
+                    xvar = list(ClimVar = Clim$NdaysRain),
+                    cdate = Clim$Date,
+                    bdate = Bio$DATE,
+                    baseline = coxph(Surv(Time0, Time, BroodReduction) ~ HatchAsync + PROPORTIONALRANK + Event + strata(Event), data = Bio),
+                    cinterval = "week",
+                    range = c(22, 0),
+                    type = "relative",
+                    stat = tidy_stat,
+                    func = tidy_func,
+                    cmissing = "method1")
+```
+
+
+
+### Results of randomization
+```{r, fig.height = 5, fig.width = 8, fig.align="center"}
+ClimWinRand = ClimRand[[1]]
+
+# Diagnostic Plots
+
+pvalue(Results, ClimWinRand, metric = "C", sample.size = 29)
+
+plothist(Results, ClimWinRand)
+
+```
+
+
+
+# Finding window for Wind
+
+```{r}
+# Climatic data
+Clim = ClimData %>%
+  select(Date , Wind) %>%
+  na.omit()
+```
+
+##Climwin analysis Area_Rain
+```{r message=FALSE, results="hide", cache=TRUE, warning=TRUE}
+ClimWin <- slidingwin(xvar = list(ClimVar = Clim$Wind), # Climatic variable
+                      cdate = Clim$Date,
+                      bdate = Bio$DATE,
+                      baseline = coxph(Surv(Time0, Time, BroodReduction) ~ HatchAsync +
+                                         PROPORTIONALRANK + Event + strata(Event) , data = Bio),
+                      cinterval = "week",
+                      range = c(17, 0),
+                      type = "relative",
+                      stat = c("min", "max", "mean", "sum"),
+                      func = c("lin", "quad"),
+                      cmissing = "method1")
+```
+
+### Results
+
+```{r}
+Comb = (ClimWin$combos) %>% rownames_to_column() %>% arrange((DeltaAICc)); Comb
+```
+
+```{r, fig.height = 5, fig.width = 8, fig.align="center"}
+n = Comb %>% .[[1,1]] %>% as.numeric()
+tidy_stat = Comb %>% .[[1, 5]] %>% as.character()
+tidy_func = Comb %>% .[[1, 6]] %>% as.character()
+Results = ClimWin[[n]]$Dataset ; head(Results, n = 4)
+```
+```{r}
+plotdelta(dataset = Results)
+```
+
+#### Extract data Wind
+```{r}
+ClimVar = "Wind"
+ClimateData = ClimWin[[n]]$BestModelData; head(ClimateData)
+Area_RainData = ClimateData %>% select(contains("climate")) %>% rename(!!ClimVar := climate) %>% 
+  rename_if((str_detect(names(.), "I\\(climate\\^2\\)")), ~ paste0(ClimVar, "_2")) %>% 
+  rename_if((str_detect(names(.), "I\\(climate\\^3\\)")), ~ paste0(ClimVar, "_3")) %>% 
+  bind_cols(Bio)
+write_csv(Area_RainData, str_glue("WinCox{ClimVar}.csv"))
+```
+## Randomization
+```{r message=FALSE, results="hide", cache=TRUE, warning=TRUE}
+ClimRand <- randwin(repeats = 15,
+                    xvar = list(ClimVar = Clim$Wind),
+                    cdate = Clim$Date,
+                    bdate = Bio$DATE,
+                    baseline = coxph(Surv(Time0, Time, BroodReduction) ~ HatchAsync + PROPORTIONALRANK + Event + strata(Event), data = Bio),
+                    cinterval = "week",
+                    range = c(17, 0),
+                    type = "relative",
+                    stat = tidy_stat,
+                    func = tidy_func,
+                    cmissing = "method1")
+```
+
+
+
+### Results of randomization
+```{r, fig.height = 5, fig.width = 8, fig.align="center"}
+ClimWinRand = ClimRand[[1]]
+
+# Diagnostic Plots
+
+pvalue(Results, ClimWinRand, metric = "C", sample.size = 29)
+
+plothist(Results, ClimWinRand)
+
+```
+
+# Finding window for Area_Rain
+
+```{r}
+# Climatic data
+Clim = ClimData %>%
+  select(Date, Area_Rain, NdaysArea_Rain, NdaysArea_RainMedium) %>%
+  na.omit()
+```
+
+##Climwin analysis 
+
+```{r message=FALSE, results="hide", cache=TRUE, warning=TRUE}
+ClimWin <- slidingwin(xvar = list(ClimVar = Clim$Area_Rain), # Climatic variable
+                      cdate = Clim$Date,
+                      bdate = Bio$DATE,
+                      baseline = coxph(Surv(Time0, Time, BroodReduction) ~ HatchAsync +
+                                         PROPORTIONALRANK + Event + strata(Event) , data = Bio),
+                      cinterval = "week",
+                      range = c(22, 0),
+                      type = "relative",
+                      stat = c("max","mean", "sum"), # Convergance with min
+                      func = c("lin", "quad"), # Can't use log and inv because of zeros
+                      cmissing = "method1")
+```
+
+### Results
+
+```{r}
+Comb = (ClimWin$combos) %>% rownames_to_column() %>% arrange((DeltaAICc)); Comb
+```
+
+```{r, fig.height = 5, fig.width = 8, fig.align="center"}
+n = Comb %>% .[[1,1]] %>% as.numeric()
+tidy_stat = Comb %>% .[[1, 5]] %>% as.character()
+tidy_func = Comb %>% .[[1, 6]] %>% as.character()
+Results = ClimWin[[n]]$Dataset ; head(Results, n = 4)
+```
+```{r}
+plotdelta(dataset = Results)
+```
+#### Extract data Area_Rain
+```{r}
+ClimVar = "Area_Rain"
+ClimateData = ClimWin[[n]]$BestModelData; head(ClimateData)
+Area_RainData = ClimateData %>% select(contains("climate")) %>% rename(!!ClimVar := climate) %>% 
+  rename_if((str_detect(names(.), "I\\(climate\\^2\\)")), ~ paste0(ClimVar, "_2")) %>% 
+  rename_if((str_detect(names(.), "I\\(climate\\^3\\)")), ~ paste0(ClimVar, "_3")) %>% 
+  bind_cols(Bio)
+write_csv(Area_RainData, str_glue("WinCox{ClimVar}.csv"))
+```
+## Randomization
+```{r message=FALSE, results="hide", cache=TRUE, warning=TRUE}
+ClimRand <- randwin(repeats = 15,
+                    xvar = list(ClimVar = Clim$Area_Rain),
+                    cdate = Clim$Date,
+                    bdate = Bio$DATE,
+                    baseline = coxph(Surv(Time0, Time, BroodReduction) ~ HatchAsync + PROPORTIONALRANK + Event + strata(Event), data = Bio),
+                    cinterval = "week",
+                    range = c(22, 0),
+                    type = "relative",
+                    stat = tidy_stat,
+                    func = tidy_func,
+                    cmissing = "method1")
+```
+
+
+
+### Results of randomization
+```{r, fig.height = 5, fig.width = 8, fig.align="center"}
+ClimWinRand = ClimRand[[1]]
+
+# Diagnostic Plots
+
+pvalue(Results, ClimWinRand, metric = "C", sample.size = 29)
+
+plothist(Results, ClimWinRand)
+
+```
+
+
+# Finding window for NArea_Rain
+
+##Climwin analysis 
+
+```{r message=FALSE, results="hide", cache=TRUE, warning=TRUE}
+ClimWin <- slidingwin(xvar = list(ClimVar = Clim$NdaysArea_RainMedium), # Climatic variable #NdaysArea_RainMedium
+                      cdate = Clim$Date,
+                      bdate = Bio$DATE,
+                      baseline = coxph(Surv(Time0, Time, BroodReduction) ~ HatchAsync +
+                                         PROPORTIONALRANK + Event + strata(Event) , data = Bio),
+                      cinterval = "week",
+                      range = c(26, 0),
+                      type = "relative",
+                      stat = c("mean", "max", "sum"), # Convergance with min
+                      func = c("quad", "lin"), 
+                      cmissing = "method1")
+```
+
+### Results
+
+```{r}
+Comb = (ClimWin$combos) %>% rownames_to_column() %>% arrange((DeltaAICc)) ; Comb
+```
+
+```{r, fig.height = 5, fig.width = 8, fig.align="center"}
+n = Comb %>% .[[1,1]] %>% as.numeric()
+tidy_stat = Comb %>% .[[1, 5]] %>% as.character()
+tidy_func = Comb %>% .[[1, 6]] %>% as.character()
+Results = ClimWin[[n]]$Dataset ; head(Results, n = 4)
+plotdelta(dataset = Results)
+```
+
+#### Extract data NArea_RainMedium
+```{r}
+ClimVar = "NArea_RainMedium"
+ClimateData = ClimWin[[n]]$BestModelData; head(ClimateData)
+Area_RainData = ClimateData %>% select(contains("climate")) %>% rename(!!ClimVar := climate) %>% 
+  rename_if((str_detect(names(.), "I\\(climate\\^2\\)")), ~ paste0(ClimVar, "_2")) %>% 
+  rename_if((str_detect(names(.), "I\\(climate\\^3\\)")), ~ paste0(ClimVar, "_3")) %>% 
+  bind_cols(Bio)
+write_csv(Area_RainData, str_glue("WinCox{ClimVar}.csv"))
+```
+## Randomization
+```{r message=FALSE, results="hide", cache=TRUE, warning=TRUE}
+ClimRand <- randwin(repeats = 15,
+                    xvar = list(ClimVar = Clim$NdaysArea_Rain),
+                    cdate = Clim$Date,
+                    bdate = Bio$DATE,
+                    baseline = coxph(Surv(Time0, Time, BroodReduction) ~ HatchAsync + PROPORTIONALRANK + Event + strata(Event), data = Bio),
+                    cinterval = "week",
+                    range = c(26, 0),
+                    type = "relative",
+                    stat = tidy_stat,
+                    func = tidy_func,
+                    cmissing = "method1")
+```
+
+
+
+### Results of randomization
+```{r, fig.height = 5, fig.width = 8, fig.align="center"}
+ClimWinRand = ClimRand[[1]]
+
+# Diagnostic Plots
+
+pvalue(Results, ClimWinRand, metric = "C", sample.size = 29)
+
+plothist(Results, ClimWinRand)
+
+```
+
+
+# Compile new data
+```{r, results="hide"}
+Chl = read_csv("WinCoxChl.csv") %>% select(1:2, NIDO, WORKYEAR, Time) 
+SST = read_csv("WinCoxSST.csv") %>% select(1:2, NIDO, WORKYEAR, Time) 
+Rain = read_csv("WinCoxRain.csv") %>% select(1:2, NIDO, WORKYEAR, Time) 
+NRain = read_csv("WinCoxNRain.csv") %>% select(1:2, NIDO, WORKYEAR, Time)
+Wind = read_csv("WinCoxWind.csv") %>% select(1:2, NIDO, WORKYEAR, Time) 
+Area_Rain = read_csv("WinCoxArea_Rain.csv") %>% select(1:2, NIDO, WORKYEAR, Time) 
+NArea_RainMedium = read_csv("WinCoxNArea_RainMedium.csv") %>% select(1:2, NIDO, WORKYEAR, Time) 
+```
+```{r results="hide"}
+Mother = read_csv("ClimMultiFailCox.csv")
+
+FinalData = plyr::join_all(list(Mother, Chl, SST, Rain, NRain, Wind, Area_Rain, NArea_RainMedium), by = c("NIDO", "WORKYEAR", "Time"), type = "left") %>% glimpse()
+write_csv(FinalData, "DATAClimMultiFailCox.csv")
+```
+
+
+
+
+
+# Which variable need to be refitted?
+```{r}
+FinalData = read_csv("DATAClimMultiFailCox.csv")
+FinalData %>% glimpse()
+CoxData = FinalData %>% 
+  # filter(CONFIRMHEMB == T) %>%
+  dplyr::mutate(across(c(PROPORTIONALRANK, HatchAsync, Chl, SST, Rain, NRain, Wind, Area_Rain,
+                 AGEHEMB, AGEMACH, NArea_RainMedium), arm::rescale)) %>% 
+  select(WORKYEAR, 
+         # ANILLOMACH, AGEMACH, 
+         # ANILLOHEMB, AGEHEMB,
+         # CoupleExpLocal,
+         PROPORTIONALRANK, HatchAsync, Chl, SST, Rain, NRain, Wind, 
+         Area_Rain, NArea_RainMedium, Event, 
+         Time0, Time, BroodReduction) %>% na.omit()
+
+Coxme = coxme::coxme(Surv(Time0, Time, BroodReduction) ~
+                       PROPORTIONALRANK + strata(Event) +
+                       HatchAsync +
+                       Chl +
+                       I(Chl^2) +
+                       SST +
+                       I(SST^2) + 
+                       Area_Rain +
+                       I(Area_Rain^2) +
+                       Wind +
+                       I(Wind^2) +
+                       # AGEHEMB + 
+                       # I(AGEHEMB^2) + 
+                       # CoupleExpLocal + 
+                       # (1|ANILLOHEMB) +
+                       (1|WORKYEAR),
+                     data = CoxData)
+
+summary(Coxme)
+```
+```{r}
+# check_collinearity(Coxme)
+rms::vif(Coxme)
+```
+We can see that cumulative and mean rain of number of rainy days have an effect on brood reduction probably because we are removing brood where both chicks died.
+We also try using rain over all the area not only over the island and only the n of day of rain is significatif but weird windows 24-9. When i put number of day that the rain was greater than 1mm/day no significatif
+We are now going to refit Chl, SST, Wind
+
+Female and male  age (quad and lin) and couple experience has no effect on brood reduction
+
+
+
+# Data For refitting
+```{r, message=FALSE}
+BioData = read_csv("DATAClimMultiFailCox.csv") %>% 
+  select(PROPORTIONALRANK, HatchAsync, Chl, Chl_2, SST, SST_2, Event, BroodReduction, NIDO, WORKYEAR, DATE, Time0, Time)
+```
+
+```{r}
+# Climatic data
+ClimData = read.csv(str_glue("C:/Users/{path}/Dropbox/PHD/DATA/Csv/ClimateVariables4.0.csv"), sep = ",", header = T,stringsAsFactors = F) %>% 
+  rename(Date = time) %>% mutate(Date = ymd(Date))
+```
+
+# Reffiting Chlorophyll-a
+```{r}
+Bio = BioData %>% filter(DATE >= "2003-05-01") %>%
+  na.omit() 
+Bio %>% names()
+```
+ 
+```{r}
+Clim = ClimData %>% select(Date , Chl) %>%
+  filter(!Chl > 70) %>% # remove one oultlier
+  mutate_at(vars(Chl), arm::rescale) %>% 
+  na.omit()
+```
+
+##Climwin analysis
+
+```{r message=FALSE, results="hide", cache=TRUE, warning=TRUE}
+ClimWin <- slidingwin(xvar = list(ClimVar = Clim$Chl), # Climatic variable
+                      cdate = Clim$Date,
+                      bdate = Bio$DATE,
+                      baseline = coxph(Surv(Time0, Time, BroodReduction) ~ HatchAsync +
+                                           PROPORTIONALRANK + Event + strata(Event) + SST_2, data = Bio),
+                      cinterval = "week",
+                      range = c(13, 0),
+                      type = "relative",
+                      stat = c("min", "max", "mean", "sum"),
+                      func = c("quad", "lin"),
+                      cmissing = "method1")
+```
+
+### Results
+
+```{r}
+Comb = (ClimWin$combos) %>% rownames_to_column() %>% arrange((DeltaAICc)) ; Comb
+```
+
+
+```{r, fig.height = 5, fig.width = 8, fig.align="center"}
+n = Comb %>% .[[1,1]] %>% as.numeric()
+tidy_stat = Comb %>% .[[1, 5]] %>% as.character()
+tidy_func = Comb %>% .[[1, 6]] %>% as.character()
+Results = ClimWin[[n]]$Dataset ; head(Results, n = 4)
+```
+```{r}
+plotdelta(dataset = Results)
+```
+
+### Weight
+```{r, eval=TRUE}
+dev.new(noRStudioGD = T)
+weight <- weightwin(n = 2,
+                    xvar = list(ClimVar = Clim$Chl),
+                    cdate = Clim$Date,
+                    bdate = Bio$DATE,
+                    baseline = glm(BroodReduction ~ HatchAsync +
+                                     PROPORTIONALRANK + 
+                                     # Event + strata(Event) + 
+                                     SST_2, data = Bio),
+                    cinterval = "week",
+                    range = c(12, 0),
+                    type = "relative",
+                    func = "quad",
+                    weightfunc = "W",
+                    par = c(3, 0.2, 0))
+```
+
+
+
+#### Extract data RefittedChl
+```{r}
+ClimVar = "RefittedChl"
+ClimateData = ClimWin[[n]]$BestModelData; head(ClimateData)
+Area_RainData = ClimateData %>% select(contains("climate")) %>% rename(!!ClimVar := climate) %>% 
+  rename_if((str_detect(names(.), "I\\(climate\\^2\\)")), ~ paste0(ClimVar, "_2")) %>% 
+  rename_if((str_detect(names(.), "I\\(climate\\^3\\)")), ~ paste0(ClimVar, "_3")) %>% 
+  bind_cols(Bio)
+write_csv(Area_RainData, str_glue("WinCox{ClimVar}.csv"))
+```
+## Randomization
+```{r message=FALSE, results="hide", cache=TRUE, warning=TRUE}
+ClimRand <- randwin(repeats = 200,
+                    xvar = list(ClimVar = Clim$Chl),
+                    cdate = Clim$Date,
+                    bdate = Bio$DATE,
+                    baseline = coxph(Surv(Time0, Time, BroodReduction) ~ HatchAsync +
+                                           PROPORTIONALRANK + Event + strata(Event) + SST_2, data = Bio),
+                    cinterval = "week",
+                    range = c(13, 0),
+                    type = "relative",
+                    stat = tidy_stat,
+                    func = tidy_func,
+                    cmissing = "method1")
+```
+
+
+
+### Results of randomization
+```{r, fig.height = 5, fig.width = 8, fig.align="center"}
+ClimWinRand = ClimRand[[1]]
+
+# Diagnostic Plots
+
+pvalue(Results, ClimWinRand, metric = "AIC", sample.size = 16)
+
+plothist(Results, ClimWinRand)
+
+```
+
+
+# Reffiting SST
+
+```{r}
+Clim = ClimData %>% select(Date , SST) %>%
+  # mutate_at(vars(SST), arm::rescale) %>% 
+  na.omit()
+```
+
+##Climwin analysis
+
+```{r message=FALSE, results="hide", cache=TRUE, warning=TRUE}
+ClimWin <- slidingwin(xvar = list(ClimVar = Clim$SST), # Climatic variable
+                      cdate = Clim$Date,
+                      bdate = Bio$DATE,
+                      baseline = coxph(Surv(Time0, Time, BroodReduction) ~ HatchAsync +
+                                           PROPORTIONALRANK + Event + strata(Event) + Chl_2, data = Bio), # we can see that there is a diference with Chl_2 and Chl
+                      cinterval = "week",
+                      range = c(8, 0),
+                      type = "relative",
+                      stat = c("min", "max", "sum", "mean"),
+                      func = c("quad", "lin", "inv", "log"),
+                      cmissing = "method1")
+```
+
+### Results
+
+```{r}
+Comb3 = (ClimWin$combos) %>% rownames_to_column() %>% 
+  arrange((DeltaAICc)); Comb
+```
+
+
+```{r, fig.height = 5, fig.width = 8, fig.align="center"}
+n = Comb %>% .[[1,1]] %>% as.numeric()
+tidy_stat = Comb %>% .[[1, 5]] %>% as.character()
+tidy_func = Comb %>% .[[1, 6]] %>% as.character()
+Results = ClimWin[[n]]$Dataset ; head(Results, n = 4)
+```
+```{r}
+plotdelta(dataset = Results)
+```
+
+### Weight
+```{r, eval=FALSE}
+
+dev.new(noRStudioGD = T)
+weight <- weightwin(n = 2,
+                    xvar = list(ClimVar = Clim$SST), # Climatic variable
+                    cdate = Clim$Date,
+                    bdate = Bio$DATE,
+                    baseline = glm(BroodReduction ~ HatchAsync +
+                                       PROPORTIONALRANK + #Event + strata(Event) + 
+                                     Chl_2, data = Bio),
+                    cinterval = "week",
+                    range = c(12, 0),
+                    type = "relative",
+                    func = "quad",
+                    weightfunc = "W",
+                    par = c(3, 0.2, 0))
+
+```
+
+#### Extract data RefittedSST
+```{r}
+ClimVar = "RefittedSST"
+ClimateData = ClimWin[[n]]$BestModelData; head(ClimateData)
+Area_RainData = ClimateData %>% select(contains("climate")) %>% rename(!!ClimVar := climate) %>% 
+  rename_if((str_detect(names(.), "I\\(climate\\^2\\)")), ~ paste0(ClimVar, "_2")) %>% 
+  rename_if((str_detect(names(.), "I\\(climate\\^3\\)")), ~ paste0(ClimVar, "_3")) %>% 
+  bind_cols(Bio)
+write_csv(Area_RainData, str_glue("WinCox{ClimVar}.csv"))
+```
+## Randomization
+```{r message=FALSE, results="hide", cache=TRUE, warning=TRUE}
+ClimRand <- randwin(repeats = 200,
+                    xvar = list(ClimVar = Clim$SST),
+                    cdate = Clim$Date,
+                    bdate = Bio$DATE,
+                    baseline = coxph(Surv(Time0, Time, BroodReduction) ~ HatchAsync +
+                                           PROPORTIONALRANK + Event + strata(Event) + Chl_2, data = Bio),
+                    cinterval = "week",
+                    range = c(8, 0),
+                    type = "relative",
+                    stat = tidy_stat,
+                    func = tidy_func,
+                    cmissing = "method1")
+```
+
+
+
+### Results of randomization
+```{r, fig.height = 5, fig.width = 8, fig.align="center"}
+ClimWinRand = ClimRand[[1]]
+
+# Diagnostic Plots
+
+pvalue(Results, ClimWinRand, metric = "AIC", sample.size = 16)
+
+plothist(Results, ClimWinRand)
+
+```
+
+
+
+
+
+
+
+
+# Final compilation of data
+```{r, results='hide'}
+# Compile new data
+RefittedChl = read_csv("WinCoxRefittedChl.csv") %>% 
+  select(1:2, NIDO, WORKYEAR, Time)
+RefittedSST = read_csv("WinCoxRefittedSST.csv") %>% 
+  select(1:2, NIDO, WORKYEAR, Time)
+
+NewMother = read_csv("DATAClimMultiFailCox.csv")
+
+FinalData = plyr::join_all(list(NewMother, RefittedChl, RefittedSST), by = c("NIDO", "WORKYEAR", "Time"), type = "left") %>% glimpse()
+write_csv(FinalData, "RefittedDATAClimCox.csv")
+```
+
+
+
+# Final Result for brood reduction and climatic and enviromental factors
+```{r}
+FinalData = read_csv("RefittedDATAClimCox.csv")
+FinalData %>% names()
+CoxData = FinalData %>%  
+  # filter(CONFIRMHEMB == T) %>%
+  mutate_at(vars(RefittedSST, RefittedChl, AGEHEMB),
+            arm::rescale) %>% 
+  select(WORKYEAR, 
+         ANILLOMACH, AGEMACH,
+         ANILLOHEMB, AGEHEMB, CoupleExpLocal, Event, 
+         PROPORTIONALRANK, HatchAsync, RefittedSST, RefittedChl, 
+         Time0, Time, BroodReduction) %>% na.omit()
+
+CoxmeWA = coxme(Surv(Time0, Time, BroodReduction) ~
+                       PROPORTIONALRANK + strata(Event) +
+                       HatchAsync +
+                       RefittedChl +
+                       I(RefittedChl^2) +
+                       RefittedSST +
+                       AGEHEMB + 
+                       I(AGEHEMB^2) + 
+                       AGEMACH + 
+                       I(AGEMACH^2) + 
+                       CoupleExpLocal + 
+                       (1|WORKYEAR) ,
+                       na.action = "na.fail",
+                     data = CoxData)
+
+  
+summary(CoxmeWA)
+```
+```{r}
+# check_collinearity(Coxme)
+rms::vif(Coxme)
+```
+
+
+
+
+
+
+
+#### Call function TestRanef
+```{r}
+source(str_glue("C:/Users/{path}/Dropbox/PHD/Custom functions/TestRanef.R"))
+```
+
+## Select random effect
+```{r}
+Coxme0 = coxph(Surv(Time0, Time, BroodReduction) ~
+                       PROPORTIONALRANK + strata(Event) +
+                       HatchAsync +
+                       RefittedChl +
+                       I(RefittedChl^2) +
+                       RefittedSST +
+                       AGEHEMB + 
+                       I(AGEHEMB^2) + 
+                       CoupleExpLocal,
+                       na.action = "na.fail",
+                     data = CoxData)
+
+# CoxmeA = update(CoxmeWA, . ~ . - (1|WORKYEAR))
+# CoxmeW = update(CoxmeWA, . ~ . - (1|ANILLOHEMB))
+
+anova(CoxmeWA, Coxme0)
+
+TestRanef(Coxme0, CoxmeWA)
+```
+
+## Model Selection
+```{r}
+drg = dredge(CoxmeWA)
+head(drg, n = 7)
+delta2=get.models(drg,subset= delta < 2)
+summary(model.avg(delta2))
+```
+```{r}
+one=get.models(drg,subset= 1);one
+```
+
+# We need to add last reproductive effort from the mother 
+
+```{r}
+FemaleCosts = read_csv(str_glue("C:/Users/{path}/Dropbox/PHD/DATA/Csv/DATAFemaleCosts.csv")) %>% 
+  select(ANILLOHEMB, WORKYEAR, NIDO, LastParentalCare_ALL, LastParentalCare_Egg, LastParentalCare_Chick)
+RefitData = read_csv("RefittedDATAClimCox.csv")
+
+AddData = left_join(RefitData, FemaleCosts, by = c("ANILLOHEMB", "WORKYEAR", "NIDO"))
+write_csv(AddData, "FinalRefittedDATAClimCox.csv")
+```
+
+
+# Final Result for brood reduction and climatic and enviromental factors
+
+### Females
+```{r}
+FinalData = read_csv("FinalRefittedDATAClimCox.csv")
+FinalData %>% names()
+CoxData = FinalData %>%  
+  # filter(CONFIRMHEMB == T) %>%
+  # filter(!ANILLOHEMB == "SA") %>%
+  mutate_at(vars(RefittedSST, RefittedChl, AGEHEMB, PROPORTIONALRANK, HatchAsync, 
+                 LastParentalCare_ALL, LastParentalCare_Egg, LastParentalCare_Chick),
+            arm::rescale) %>% 
+  select(WORKYEAR, 
+         # ANILLOMACH, AGEMACH,
+         # ANILLOHEMB, AGEHEMB,
+         CoupleExpLocal, Event, NIDO,
+         # LastParentalCare_ALL, LastParentalCare_Egg, LastParentalCare_Chick,
+         PROPORTIONALRANK, HatchAsync, RefittedSST, RefittedChl, #RefittedWind,
+         Time0, Time, BroodReduction) %>% na.omit()
+
+CoxmeWA = coxme(Surv(Time0, Time, BroodReduction) ~
+                  PROPORTIONALRANK + strata(Event) +
+                  HatchAsync +
+                  RefittedChl +
+                  I(RefittedChl^2) +
+                  # RefittedWind +
+                  # I(RefittedWind^2) +
+                  RefittedSST +
+                  # AGEHEMB +
+                  # I(AGEHEMB^2) +
+                  # LastParentalCare_Chick +
+                  # AGEMACH + 
+                  # I(AGEMACH^2) + 
+                  CoupleExpLocal +
+                  (1|NIDO) + (1|WORKYEAR),
+                na.action = "na.fail",
+                data = CoxData)
+
+  
+summary(CoxmeWA)
+```
+```{r}
+# check_collinearity(Coxme)
+rms::vif(CoxmeWA)
+
+```
+## Select random effect
+```{r}
+Coxme0 = coxph(Surv(Time0, Time, BroodReduction) ~
+                       PROPORTIONALRANK + strata(Event) +
+                       HatchAsync +
+                       RefittedChl +
+                       I(RefittedChl^2) +
+                       RefittedSST +
+                       # AGEHEMB + 
+                       # I(AGEHEMB^2) + 
+                       CoupleExpLocal,
+                       na.action = "na.fail",
+                     data = CoxData)
+
+# CoxmeA = update(CoxmeWA, . ~ . - (1|WORKYEAR))
+# CoxmeW = update(CoxmeWA, . ~ . - (1|ANILLOHEMB))
+```
+```{r}
+TestRanef(Coxme0, CoxmeWA)
+```
+```{r}
+# TestRanef(Coxme0, CoxmeA)
+```
+```{r}
+# TestRanef(Coxme0, CoxmeW)
+```
+
+
+## Model Selection
+```{r}
+drg = dredge(CoxmeWA)
+head(drg, n = 7)
+delta2=get.models(drg,subset= delta < 2)
+summary(model.avg(delta2))
+```
+```{r}
+one=get.models(drg,subset= 1);one
+```
+
+# Plotting
+```{r}
+FinalData = read_csv("FinalRefittedDATAClimCox.csv")
+CoxData = FinalData %>%
+  select(WORKYEAR,
+         RefittedSST, RefittedChl, 
+         Time0, Time, BroodReduction) %>% na.omit()
+CoxBest = coxph(Surv(Time0, Time, BroodReduction) ~
+                    RefittedChl +
+                    I(RefittedChl^2) +
+                    RefittedSST +
+                    frailty(WORKYEAR),
+                  data = CoxData)
+```
+```{r}
+# SST
+prs = predict(CoxBest, CoxData,
+              type = c("risk"), se.fit = T)
+NDpred = CoxData %>% mutate(pred = prs$fit)
+NDpred %>%
+  # filter(ClimWSST == median(ClimWSST)) %>%
+  # filter(HatchAsync == median(HatchAsync)) %>%
+  # filter(PROPORTIONALRANK == median(PROPORTIONALRANK)) %>%
+  # filter(WORKYEAR == 2017) %>%
+  # arrange(ClimWRain_2) %>%
+  ggplot(aes(RefittedSST ,pred)) + geom_point() + geom_smooth(method = "lm", formula = y ~ x, size = 1) +
+  # geom_smooth(stat = "identity", aes(ymin = lo, ymax = up)) +
+  # scale_x_continuous(n.breaks = 20, limits = c(22,28)) +
+  # scale_y_continuous(labels = scales::comma, n.breaks = 20, limits = c(0.1,10)) +
+  geom_hline(yintercept = 1, size = 1.1, color = "red", linetype = "dashed") +
+  geom_vline(xintercept = 24.5, size = 0.5, color = "red", linetype = "dashed") +
+  labs(y = "Hazard Ratio") +
+  theme_fivethirtyeight() + theme(axis.title = element_text())
+
+
+# plotHR(CoxBest, term = "ClimWChl_2", plot.bty = "o", xlim = c(0, 30), xlab = "ClimWChl", se = T)
+# sec = seq(from = 0, to = 29, by = 5)
+```
+
+```{r}
+# Chl
+
+NDpred %>%
+  # filter(ClimWSST == median(ClimWSST)) %>%
+  # filter(HatchAsync == median(HatchAsync)) %>%
+  # filter(PROPORTIONALRANK == median(PROPORTIONALRANK)) %>%
+  # filter(WORKYEAR == 2017) %>%
+  # arrange(ClimWRain_2) %>%
+  ggplot(aes(RefittedChl ,pred)) + geom_point() + geom_smooth() + #method = "lm", formula = y ~ x + I(x^2), size = 1) +
+  # geom_smooth(stat = "identity", aes(ymin = lo, ymax = up)) +
+  # scale_x_continuous(n.breaks = 20, limits = c(22,28)) +
+  # scale_y_continuous(labels = scales::comma, n.breaks = 20, limits = c(0.1,10)) +
+  geom_hline(yintercept = 1, size = 1.1, color = "red", linetype = "dashed") +
+  geom_vline(xintercept = 1, size = 0.5, color = "red", linetype = "dashed") +
+  labs(y = "Hazard Ratio") +
+  theme_fivethirtyeight() + theme(axis.title = element_text())
+  
+# plotHR(CoxBest, term = "ClimWChl_2", plot.bty = "o", xlim = c(0, 30), xlab = "ClimWChl", se = T)
+# sec = seq(from = 0, to = 29, by = 5)
+```
+
+
+
